@@ -13,10 +13,6 @@ import matplotlib.image as mpimg
 import seaborn as sns
 from time import time
 
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import confusion_matrix
-import itertools
-
 import mxnet as mx
 from mxnet import nd
 from mxnet import gluon
@@ -88,10 +84,10 @@ def evaluate_accuracy(net, test_iter, ctx=mx.gpu()):
 
 # 3. define loss function, learning_rate, epochs, weight_decay
 softmaxCrossentroy = gluon.loss.SoftmaxCrossEntropyLoss()
-learning_rate = 0.001
+learning_rate = 0.0003
 epochs = 35
 verbose_epoch = 0
-weight_decay = 0.0
+weight_decay = 1e-4
 ctx = try_gpu()
 # ctx_list = try_all_gpu()
 
@@ -105,15 +101,32 @@ x_train = x_train.as_matrix().reshape(-1, 1, 28, 28)
 y_train = y_train.as_matrix()
 test = test.as_matrix().reshape(-1, 1, 28, 28)
 
+x_train = nd.array(x_train, ctx=ctx)
+y_train = nd.array(y_train, ctx=ctx)
+x_test = nd.array(test, ctx=ctx)
+del test
 
 # plt.imshow(x_train[4][0][:,:])
 # plt.show()
 
 
-x_train = nd.array(x_train, ctx=ctx)
-y_train = nd.array(y_train, ctx=ctx)
-x_test = nd.array(test, ctx=ctx)
-del test
+# define vgg_block
+def vgg_block(num_convs, channels):
+    out = nn.Sequential()
+    for _ in range(num_convs):
+        out.add(
+            nn.Conv2D(channels=channels, kernel_size=3, padding=1, activation='relu')
+        )
+        out.add(nn.MaxPool2D(pool_size=2, strides=2))
+        return out
+
+
+# define vgg_stack
+def vgg_stack(architecture):
+    out = nn.Sequential()
+    for (num_convs, channels) in architecture:
+        out.add(vgg_block(num_convs, channels))
+    return out
 
 
 # 6. define net
@@ -128,12 +141,97 @@ def get_net():
             nn.Conv2D(channels=50, kernel_size=3, strides=1, padding=1, activation='relu'),
             nn.Flatten(),
             nn.Dense(128, activation='relu'),
-            nn.Dropout(0.5),
+            # nn.Dropout(0.25),
             nn.Dense(10)
         )
     net.initialize(init=init.Xavier(), ctx=ctx)
-    return net
 
+    net2 = nn.Sequential()
+    with net2.name_scope():
+        net2.add(
+            nn.Conv2D(channels=32, kernel_size=3, strides=1, padding=1),
+            nn.BatchNorm(axis=1),
+            nn.Activation(activation='relu'),
+            # nn.MaxPool2D(pool_size=2, strides=2, padding=0),
+
+            nn.Conv2D(channels=32, kernel_size=3, strides=1, padding=1),
+            nn.BatchNorm(axis=1),
+            nn.Activation(activation='relu'),
+            nn.MaxPool2D(pool_size=2, strides=2, padding=0),
+
+            nn.Conv2D(channels=64, kernel_size=3, strides=1, padding=1),
+            nn.BatchNorm(axis=1),
+            nn.Activation(activation='relu'),
+
+            nn.Conv2D(channels=64, kernel_size=3, strides=1, padding=1),
+            nn.BatchNorm(axis=1),
+            nn.Activation(activation='relu'),
+            nn.MaxPool2D(pool_size=2, strides=2),
+
+            nn.Flatten(),
+            nn.Dense(256),
+            nn.BatchNorm(axis=1),
+            nn.Activation(activation='relu'),
+            nn.Dropout(0.25),
+            nn.Dense(256),
+            nn.BatchNorm(axis=1),
+            nn.Activation(activation='relu'),
+            nn.Dropout(0.25),
+            nn.Dense(10)
+        )
+    net2.initialize(init=init.Xavier(), ctx=ctx)
+
+    net3 = nn.Sequential()
+    architecture = ((1, 20), (2, 30), (2, 50))
+    with net3.name_scope():
+        net3.add(
+            vgg_stack(architecture),
+            nn.Flatten(),
+            nn.Dense(128, activation='relu'),
+            nn.Dropout(0.25),
+            nn.Dense(128, activation='relu'),
+            nn.Dropout(0.25),
+            nn.Dense(10)
+        )
+    net3.initialize(init=init.Xavier(), ctx=ctx)
+
+    net2.hybridize()
+    return net2
+
+net = nn.Sequential()
+with net.name_scope():
+    net.add(
+        nn.Conv2D(channels=32, kernel_size=3, strides=1, padding=1),
+        nn.BatchNorm(axis=1),
+        nn.Activation(activation='relu'),
+        # nn.MaxPool2D(pool_size=2, strides=2, padding=0),
+
+        nn.Conv2D(channels=32, kernel_size=3, strides=1, padding=1),
+        nn.BatchNorm(axis=1),
+        nn.Activation(activation='relu'),
+        nn.MaxPool2D(pool_size=2, strides=2, padding=0),
+
+        nn.Conv2D(channels=64, kernel_size=3, strides=1, padding=1),
+        nn.BatchNorm(axis=1),
+        nn.Activation(activation='relu'),
+
+        nn.Conv2D(channels=64, kernel_size=3, strides=1, padding=1),
+        nn.BatchNorm(axis=1),
+        nn.Activation(activation='relu'),
+        nn.MaxPool2D(pool_size=2, strides=2),
+
+        nn.Flatten(),
+        nn.Dense(256),
+        nn.BatchNorm(axis=1),
+        nn.Activation(activation='relu'),
+        nn.Dropout(0.25),
+        nn.Dense(256),
+        nn.BatchNorm(axis=1),
+        nn.Activation(activation='relu'),
+        nn.Dropout(0.25),
+        nn.Dense(10)
+    )
+net.initialize(init=init.Xavier(), ctx=ctx)
 # print(net)
 
 
@@ -202,7 +300,7 @@ def train(net, x_train, y_train, x_test, epochs, verbose_epoch, learning_rate, w
     return total_train_loss, total_test_loss
 
 
-def train2(net, X_train, Y_train, X_test, Y_test, epochs, verbose, learning_rate, weight_decay, batch_size):
+def train2(X_train, Y_train, X_test, Y_test, epochs, verbose, learning_rate, weight_decay, batch_size):
     # 用于画曲线图
     train_loss_list = []
     train_acc_list = []
@@ -217,7 +315,7 @@ def train2(net, X_train, Y_train, X_test, Y_test, epochs, verbose, learning_rate
     data_iter_test = gluon.data.DataLoader(dataset_test, batch_size, shuffle=False)
 
     trainer = gluon.Trainer(net.collect_params(), 'adam', {'learning_rate': learning_rate, 'wd': weight_decay})
-    net.collect_params().initialize(force_reinit=True, ctx=mx.gpu())  # 每轮的训练重新初始化权重
+    net.collect_params().initialize(force_reinit=True, ctx=mx.gpu(0))  # 每轮的训练重新初始化权重
     # net.initialize(ctx=ctx)
     for epoch in range(epochs):
         tic = time()
@@ -236,36 +334,29 @@ def train2(net, X_train, Y_train, X_test, Y_test, epochs, verbose, learning_rate
             train_loss += loss.mean().asscalar()
             train_acc += nd.mean(output.argmax(axis=1)==label).asscalar()
 
-        if epoch > verbose_epoch:
-            print('Epoch %d, train loss: %f， train_acc: %f, time: %f' %(epoch,
-                    train_loss/len(data_iter_train), train_acc/len(data_iter_train), time()-tic))
-        train_loss_list.append(train_loss)
-        train_acc_list.append(train_acc)
-        if X_test is not None:
-            test_loss, test_acc = validation(net, data_iter_test, ctx)
-            # print('Epoch %d, test loss: %f, test_acc: %f' %(epoch,
-            #         test_loss/len(data_iter_test), test_acc/len(data_iter_test)))
-            test_loss_list.append(test_loss)
-            test_acc_list.append(test_acc)
+        test_loss, test_acc = validation(net, data_iter_test, ctx)
 
-    plt.plot(train_loss_list)
-    plt.legend(['train_loss'])
-    if X_test is not None:
-        plt.plot(test_loss_list)
-        plt.legend(['train_loss, test_loss'])
+        train_loss_list.append(train_loss/len(data_iter_train))
+        train_acc_list.append(train_acc/len(data_iter_train))
+        test_loss_list.append(test_loss / len(data_iter_test))
+        test_acc_list.append(test_acc / len(data_iter_test))
+
+        if epoch > verbose_epoch and X_test is not None:
+            print('Epoch %d, train-loss: %.3f, train-acc: %.3f, test loss: %.3f, test_acc: %.3f, time: %.1f' % (epoch,
+                train_loss/len(data_iter_train), train_acc/len(data_iter_train), test_loss/len(data_iter_test), test_acc/len(data_iter_test), time()-tic))
+
+
+    # 画出loss和acc曲线图
+    x_axis = np.arange(1, 36)
+    plt.plot(x_axis, train_loss_list, 'r')
+    plt.plot(x_axis, test_loss_list, 'g')
+    plt.legend(['train-loss', 'test-loss'])
     plt.show()
 
     if X_test is not None:
-        return train_loss, test_loss
+        return train_loss/len(data_iter_train), test_loss/len(data_iter_test)
     else:
-        return train_loss
-
-
-
-
-
-# trian mnist network
-# train(net, x_train, y_train, x_test, epochs, verbose_epoch, learning_rate, weight_decay)
+        return train_loss/len(data_iter_train)
 
 
 # 8.K-fold corss validation
@@ -292,24 +383,20 @@ def k_fold_cross_valid(k, epochs, verbose_epoch, X_train, y_train, learning_rate
                     x_val_train = nd.concat(x_val_train, X_cur_fold, dim=0)
                     y_val_train = nd.concat(y_val_train, y_cur_fold, dim=0)
         # net.collect_params().initialize(force_reinit=True)
-        net = get_net()
-        train_loss, test_loss = train2(net, x_val_train, y_val_train, X_val_test, y_val_test, epochs, verbose_epoch,
+        # net = get_net()
+        train_loss, test_loss = train2(x_val_train, y_val_train, X_val_test, y_val_test, epochs, verbose_epoch,
               learning_rate, weight_decay, batch_size)
         train_loss_sum += train_loss
-        print('Test loss: %f', test_loss)
+        print('[%d fold validation] train-loss: %.3f,  test-loss: %.3f' % (test_i, train_loss, test_loss))
         test_loss_sum += test_loss
-    return train_loss_sum / k, test_loss_sum / k
-    # print('k-fold-valid ', train_loss_sum/k, test_loss_sum/k)
 
-
-k = 5
-batch_size = 100
-avg_train_loss, avg_test_loss = k_fold_cross_valid(k, epochs, verbose_epoch, x_train, y_train, learning_rate, weight_decay, batch_size)
-print('%d-fold validation: Avg train loss: %f, Avg test loss: %f' %(k, avg_train_loss, avg_test_loss))
+        if test_i == 0:
+            break
+    return (train_loss_sum / k, test_loss_sum / k)
 
 
 # 9.inference
-def learn(test_data, net):
+def learn(test_data):
     # batch_size = 100
     # dataset_test = gluon.data.ArrayDataset(test_data)
     # data_iter_test = gluon.data.DataLoader(dataset_test, batch_size)
@@ -321,9 +408,16 @@ def learn(test_data, net):
 
     submission = pd.concat([pd.Series(range(1, 28001), name="ImageId"), output], axis=1)
     submission.to_csv("cnn_mnist_test.csv", index=False)
+    print('-------predict over----------')
 
 
-# learn(x_test, net)
+if __name__ == '__main__':
+    k = 10
+    batch_size = 50
+    avg_train_loss, avg_test_loss= k_fold_cross_valid(k, epochs, verbose_epoch, x_train, y_train, learning_rate, weight_decay, batch_size)
+    print('%d-fold validation: Avg train loss: %f, Avg test loss: %f' %(k, avg_train_loss, avg_test_loss))
+    print('------begin to predict-------')
+    learn(x_test)
 
 
 # define activation function
